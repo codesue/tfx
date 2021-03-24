@@ -18,7 +18,6 @@ from __future__ import division
 from __future__ import print_function
 
 import os
-import re
 from typing import Callable, Dict, List, Optional, Text, Type, cast
 
 from absl import logging
@@ -28,19 +27,16 @@ from kfp import gcp
 from kubernetes import client as k8s_client
 from tfx import version
 from tfx.dsl.compiler import compiler as tfx_compiler
-from tfx.orchestration import data_types
 from tfx.orchestration import pipeline as tfx_pipeline
 from tfx.orchestration import tfx_runner
 from tfx.orchestration.config import config_utils
 from tfx.orchestration.config import pipeline_config
 from tfx.orchestration.kubeflow import base_component
-from tfx.orchestration.kubeflow import utils
 from tfx.orchestration.kubeflow.proto import kubeflow_pb2
 from tfx.orchestration.launcher import base_component_launcher
 from tfx.orchestration.launcher import in_process_component_launcher
 from tfx.orchestration.launcher import kubernetes_component_launcher
 from tfx.proto.orchestration import pipeline_pb2
-from tfx.utils import json_utils
 from tfx.utils import telemetry_utils
 
 
@@ -264,45 +260,6 @@ class KubeflowDagRunner(tfx_runner.TfxRunner):
     else:
       self._pod_labels_to_attach = pod_labels_to_attach
 
-  def _parse_parameter_from_component(
-      self, component: base_component.BaseComponent) -> None:
-    """Extract embedded RuntimeParameter placeholders from a component.
-
-    Extract embedded RuntimeParameter placeholders from a component, then append
-    the corresponding dsl.PipelineParam to KubeflowDagRunner.
-
-    Args:
-      component: a TFX component.
-    """
-
-    serialized_component = json_utils.dumps(component)
-    placeholders = re.findall(data_types.RUNTIME_PARAMETER_PATTERN,
-                              serialized_component)
-    for placeholder in placeholders:
-      placeholder = placeholder.replace('\\', '')  # Clean escapes.
-      placeholder = utils.fix_brackets(placeholder)  # Fix brackets if needed.
-      parameter = json_utils.loads(placeholder)
-      # Escape pipeline root because it will be added later.
-      if parameter.name == tfx_pipeline.ROOT_PARAMETER.name:
-        continue
-      if parameter.name not in self._deduped_parameter_names:
-        self._deduped_parameter_names.add(parameter.name)
-        # TODO(b/178436919): Create a test to cover default value rendering
-        # and move the external code reference over there.
-        # The default needs to be serialized then passed to dsl.PipelineParam.
-        # See
-        # https://github.com/kubeflow/pipelines/blob/f65391309650fdc967586529e79af178241b4c2c/sdk/python/kfp/dsl/_pipeline_param.py#L154
-        dsl_parameter = dsl.PipelineParam(
-            name=parameter.name, value=str(parameter.default))
-        self._params.append(dsl_parameter)
-
-  def _parse_parameter_from_pipeline(self,
-                                     pipeline: tfx_pipeline.Pipeline) -> None:
-    """Extract all the RuntimeParameter placeholders from the pipeline."""
-
-    for component in pipeline.components:
-      self._parse_parameter_from_component(component)
-
   def _construct_pipeline_graph(self, pipeline: tfx_pipeline.Pipeline,
                                 pipeline_root: dsl.PipelineParam):
     """Constructs a Kubeflow Pipeline graph.
@@ -373,14 +330,9 @@ class KubeflowDagRunner(tfx_runner.TfxRunner):
       """
       self._construct_pipeline_graph(pipeline, dsl_pipeline_root)
 
-    # Need to run this first to get self._params populated. Then KFP compiler
-    # can correctly match default value with PipelineParam.
-    self._parse_parameter_from_pipeline(pipeline)
-
     file_name = self._output_filename or pipeline.pipeline_info.pipeline_name + '.tar.gz'
     # Create workflow spec and write out to package.
     self._compiler._create_and_write_workflow(  # pylint: disable=protected-access
         pipeline_func=_construct_pipeline,
         pipeline_name=pipeline.pipeline_info.pipeline_name,
-        params_list=self._params,
         package_path=os.path.join(self._output_dir, file_name))
