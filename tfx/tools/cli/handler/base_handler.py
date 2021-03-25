@@ -188,15 +188,8 @@ class BaseHandler(with_metaclass(abc.ABCMeta, object)):
     if return_code != 0:
       sys.exit('Error while running "{}" '.format(' '.join(command)))
 
-  def _format_table(self, header: Collection[Any],
-                    data: Collection[Collection[Any]]):
-
-    def _format_as_strings(items):
-      return [f' {item} ' for item in items]
-
-    header = _format_as_strings(header)
-    data = [_format_as_strings(row) for row in data]
-
+  def _format_table(self, header: Collection[str],
+                    data: Collection[Collection[str]]):
     max_widths = [len(s) for s in header]
     for row in data:
       max_widths = [
